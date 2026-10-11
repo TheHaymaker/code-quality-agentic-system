@@ -1,0 +1,15 @@
+# This repository's own risk rules. A rule here can raise a tier. It can never
+# lower one: the global floor in the control repo always applies as well.
+#
+# cq reads this file from the base commit of a run, not from the branch under
+# review, so a change cannot rewrite the rules it is judged by. Any change to
+# this file is itself a tier 3 change.
+#
+# Tiers: 0 Low, 1 Standard, 2 High, 3 Critical.
+
+schema_version: 1
+
+rules: []
+#  - {glob: "src/pricing/**",   tier: 3, reason: "Pricing logic"}
+#  - {glob: "src/signup/**",    tier: 3, reason: "Conversion funnel entry"}
+#  - {glob: "src/reports/**",   tier: 2, reason: "Customer-facing numbers"}

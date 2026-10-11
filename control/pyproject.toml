@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cq-control"
+version = "0.1.0"
+description = "Deterministic policy engine and run store for the agentic code quality system"
+requires-python = ">=3.9"
+dependencies = ["PyYAML>=6", "jsonschema>=4"]
+
+[project.scripts]
+cq = "cq.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+cq = ["schemas/*.json"]

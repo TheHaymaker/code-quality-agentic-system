@@ -1,0 +1,55 @@
+# Role to model routing. `cq models <run>` prints the row for the run's tier.
+# The orchestrating skill passes these values when it starts each agent.
+# Change a model here; no role contract changes with it.
+
+schema_version: 1
+
+roles:
+  screener:
+    default: {model: claude-haiku-4-5-20251001, family: anthropic, effort: low}
+  planner:
+    default: {model: claude-opus-5-5, family: anthropic, effort: medium}
+    tiers:
+      2: {model: claude-fable-5-1, family: anthropic, effort: max}
+      3: {model: claude-fable-5-1, family: anthropic, effort: max}
+  # The implementer's family is what the adversary is compared against.
+  implementer:
+    default: {model: claude-sonnet-5-5, family: anthropic, effort: medium}
+    tiers:
+      2: {model: claude-opus-5-5, family: anthropic, effort: medium}
+      3: {model: claude-opus-5-5, family: anthropic, effort: medium}
+  reviewer:
+    default: {model: claude-opus-5-5, family: anthropic, effort: high}
+  verifier:
+    default: {model: claude-opus-5-5, family: anthropic, effort: high}
+  aggregator:
+    default: {model: claude-opus-5-5, family: anthropic, effort: high}
+    tiers:
+      3: {model: claude-fable-5-1, family: anthropic, effort: max}
+  fixer:
+    default: {model: claude-sonnet-5-5, family: anthropic, effort: medium}
+    tiers:
+      2: {model: claude-opus-5-5, family: anthropic, effort: medium}
+      3: {model: claude-opus-5-5, family: anthropic, effort: medium}
+  utility:
+    default: {model: claude-haiku-4-5-20251001, family: anthropic, effort: low}
+
+# The cross-vendor adversary. cq runs `argv` in the worktree, sends the review
+# brief on stdin and reads one JSON object from stdout. cq stamps the model and
+# family from this file onto the findings, so the reviewer cannot misreport them.
+#
+# [FILL IN] all three fields. Until you do, tier 2 and 3 runs report the
+# adversary as missing evidence, which is the correct result.
+# `family` must differ from the implementer's family.
+adversary:
+  model: ""
+  family: ""
+  argv: []
+  timeout_seconds: 1800
+
+# The second adversary, tier 3 only. It must use a different model from the first.
+adversary2:
+  model: ""
+  family: ""
+  argv: []
+  timeout_seconds: 1800

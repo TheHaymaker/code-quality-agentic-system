@@ -1,0 +1,12 @@
+{
+  "model": {"maxSessionTurns": 60},
+  "tools": {
+    "core": ["read_file", "read_many_files", "glob", "grep_search", "list_directory"],
+    "discoveryCommand": "",
+    "callCommand": ""
+  },
+  "mcpServers": {},
+  "context": {"fileName": ["CQ-REVIEW-NO-CONTEXT.md"]},
+  "hooksConfig": {"enabled": false},
+  "skills": {"enabled": false}
+}

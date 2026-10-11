@@ -87,3 +87,18 @@ remove each entry as the capability lands.
 - [ ] Tag `v0.1.0` once the import PR is merged into `main`.
 - [ ] Make `main` the default branch in GitHub settings.
 - [x] Add a `CLAUDE.md` describing repo conventions for agent contributors.
+
+## 6. Repo split
+
+Risk policy, escalation and the repo map move to their own repos; this repo
+keeps the `cq` engine. Seed contents are prepared (README, TODO, copied files).
+
+- [ ] Create private repos `cq-risk`, `cq-escalation`, `cq-repo-map` on GitHub
+      and give the Claude GitHub App access, then push the seeds.
+  - `cq-risk`: `policy/floor.yml`, `templates/cq/criticality.yml`,
+    `templates/cq/standards/business-critical-map.md`
+  - `cq-escalation`: `hermes/cq-operator/`, escalation runbook
+  - `cq-repo-map`: `registry.yml`
+- [ ] Teach `install.sh` to take those files from the new repos (or from paths
+      given as arguments), then remove the copies here so each has one source of truth.
+- [ ] Keep tests self-contained: they use `tests/fixtures/`, not the shipped files.

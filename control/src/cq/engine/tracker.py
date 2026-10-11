@@ -81,6 +81,8 @@ class JiraTracker(Tracker):
         else:
             self.header = "Bearer " + token
         self.issue_type = settings.get("issue_type", "Task")
+        # Jira Cloud: /rest/api/3/search/jql. Data Center: the older /rest/api/2/search.
+        self.search_api = settings.get("search_api", "jql")
 
     def _call(self, method: str, path: str, body: Any = None, params: Optional[Dict[str, str]] = None) -> Any:
         url = self.base + path + (("?" + urllib.parse.urlencode(params)) if params else "")
@@ -128,6 +130,8 @@ class JiraTracker(Tracker):
         }
 
     def _jql(self, jql: str) -> List[str]:
+        if self.search_api == "legacy":
+            return self._jql_legacy(jql)
         keys: List[str] = []
         token = None
         for _ in range(50):
@@ -138,6 +142,17 @@ class JiraTracker(Tracker):
             keys += [i["key"] for i in page.get("issues", [])]
             token = page.get("nextPageToken")
             if page.get("isLast", True) or not token:
+                return keys
+        raise TrackerError("JQL search returned more than 50 pages")
+
+    def _jql_legacy(self, jql: str) -> List[str]:
+        keys: List[str] = []
+        for _ in range(50):
+            params = {"jql": jql, "fields": "key", "maxResults": "100", "startAt": str(len(keys))}
+            page = self._call("GET", "/rest/api/2/search", params=params)
+            issues = page.get("issues", [])
+            keys += [i["key"] for i in issues]
+            if not issues or len(keys) >= int(page.get("total", 0)):
                 return keys
         raise TrackerError("JQL search returned more than 50 pages")
 

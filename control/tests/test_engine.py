@@ -60,15 +60,23 @@ class FakeJira(http.server.BaseHTTPRequestHandler):
                 return self._send(404, {"errorMessages": ["Issue does not exist"]})
             return self._send(200, {"key": m.group(1), "fields": dict(issue, project={"key": m.group(1).split("-")[0]})})
         if u.path == "/rest/api/3/search/jql":
-            jql = q["jql"]
-            projects = re.findall(r'"([A-Z]+)"', (re.search(r"project (?:in \(([^)]*)\)|= (\"[A-Z]+\"))", jql).group(0)))
-            need = re.findall(r'labels = "([^"]+)"', jql)
-            avoid = re.findall(r'labels != "([^"]+)"', jql)
-            keys = sorted((k for k, i in st["issues"].items()
-                           if k.split("-")[0] in projects and all(l in i["labels"] for l in need)
-                           and not any(l in i["labels"] for l in avoid)), key=lambda k: int(k.split("-")[1]))
-            return self._send(200, {"issues": [{"key": k} for k in keys], "isLast": True})
+            return self._send(200, {"issues": [{"key": k} for k in self._match(q["jql"])], "isLast": True})
+        if u.path == "/rest/api/2/search":
+            # Data Center: offset pagination, two issues a page so paging is exercised.
+            keys = self._match(q["jql"])
+            start = int(q.get("startAt", 0))
+            return self._send(200, {"issues": [{"key": k} for k in keys[start:start + 2]],
+                                    "startAt": start, "total": len(keys)})
         self._send(404, {"errorMessages": ["no route"]})
+
+    @staticmethod
+    def _match(jql):
+        projects = re.findall(r'"([A-Z]+)"', (re.search(r"project (?:in \(([^)]*)\)|= (\"[A-Z]+\"))", jql).group(0)))
+        need = re.findall(r'labels = "([^"]+)"', jql)
+        avoid = re.findall(r'labels != "([^"]+)"', jql)
+        return sorted((k for k, i in FakeJira.state["issues"].items()
+                       if k.split("-")[0] in projects and all(l in i["labels"] for l in need)
+                       and not any(l in i["labels"] for l in avoid)), key=lambda k: int(k.split("-")[1]))
 
     def do_POST(self):
         if not self._auth():
@@ -764,6 +772,45 @@ class Units(unittest.TestCase):
         self.assertIn("no structured answer", r["error"])
         r = agents.ClaudeRunner._parse(0, "not json", "boom")
         self.assertIn("boom", r["error"])
+
+
+
+class JiraSearch(unittest.TestCase):
+    """Both search endpoints return the same issues: Cloud's token-paged
+    /rest/api/3/search/jql and Data Center's offset-paged /rest/api/2/search."""
+
+    def setUp(self):
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeJira)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        FakeJira.state = {"issues": {
+            "SHOP-%d" % n: {"summary": "s%d" % n, "description": "", "labels": ["agent-ready"] + (["needs-human"] if n == 3 else [])}
+            for n in range(1, 7)}}
+        patcher = mock.patch.dict(os.environ, {"JIRA_EMAIL": "bot@example.com", "JIRA_API_TOKEN": "jira-token"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.settings = {"kind": "jira", "base_url": "http://127.0.0.1:%d" % server.server_address[1],
+                         "auth": "basic", "email_env": "JIRA_EMAIL", "token_env": "JIRA_API_TOKEN"}
+
+    def test_cloud_and_data_center_agree(self):
+        want = ["SHOP-1", "SHOP-2", "SHOP-4", "SHOP-5", "SHOP-6"]
+        for api in ("jql", "legacy"):
+            t = trackers.make({"tracker": dict(self.settings, search_api=api)})
+            self.assertEqual([i["key"] for i in t.search(["SHOP"], "agent-ready", ["needs-human"])], want, api)
+            self.assertEqual(t.find_by_label("SHOP", "needs-human"), "SHOP-3", api)
+            self.assertIsNone(t.find_by_label("SHOP", "no-such-label"), api)
+
+    def test_settings_accept_search_api(self):
+        from cq.util import CqError
+        import tempfile
+        base = (ROOT / "tests" / "fixtures" / "engine.yml").read_text()
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, "engine.yml").write_text(base.replace("  issue_type: Task", "  search_api: legacy\n  issue_type: Task"))
+            self.assertEqual(settings.load(Path(d))["tracker"]["search_api"], "legacy")
+            Path(d, "engine.yml").write_text(base.replace("  issue_type: Task", "  search_api: v1\n  issue_type: Task"))
+            with self.assertRaises(CqError):
+                settings.load(Path(d))
 
 
 if __name__ == "__main__":

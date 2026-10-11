@@ -13,6 +13,7 @@ tracker:
   email_env: JIRA_EMAIL
   token_env: JIRA_API_TOKEN
   issue_type: Task                                   # for filed findings and escalations
+  search_api: jql                                    # jql (Cloud) or legacy (Data Center: /rest/api/2/search)
   # kind: files
   # dir: ~/cq-tickets
 

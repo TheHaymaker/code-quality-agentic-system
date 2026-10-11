@@ -131,7 +131,8 @@ Or from an installed control repo:
 cd ~/cq-control && .venv/bin/python -m unittest discover -s tests
 ```
 
-About three and a half minutes. `tests/test_policy.py` is the contract: same
+About three and a half minutes. CI (`.github/workflows/tests.yml`) runs the
+fast suite on every push and the full suite on pull requests and nightly. `tests/test_policy.py` is the contract: same
 input, same verdict; missing or stale evidence is never a pass. The tests use
 their own copy of the policy, so edits to `policy/floor.yml` do not break them.
 

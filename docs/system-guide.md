@@ -298,8 +298,8 @@ Try each once on a noncritical merge request.
 - **Gemini CLI flags.** `--policy` and the read-only rules follow the CLI's
   source; check `stats.tools` in the first adversary log for which tools it used.
 - **Jira search.** The engine uses `/rest/api/3/search/jql`, the endpoint that
-  replaced `/search` on Jira Cloud. Jira Data Center keeps the old one and needs
-  a small change in `engine/tracker.py`.
+  replaced `/search` on Jira Cloud. Jira Data Center keeps the old one: set
+  `search_api: legacy` under `tracker` in `engine.yml` to use `/rest/api/2/search`.
 - **GitLab 19.4 added a REST trigger for the agentic Code Review Flow**
   (`POST /api/v4/ai/duo_workflows/workflows`, experimental). It is not used
   here; the quick action works for both Duo variants.

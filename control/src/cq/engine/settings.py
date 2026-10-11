@@ -27,6 +27,7 @@ SCHEMA = {
                 "email_env": {"type": "string"},
                 "token_env": {"type": "string"},
                 "issue_type": {"type": "string", "minLength": 1},
+                "search_api": {"enum": ["jql", "legacy"]},
                 "dir": {"type": "string", "minLength": 1},
             },
         },

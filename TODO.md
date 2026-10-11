@@ -39,8 +39,9 @@ Status at import: all 225 tests pass against fakes
       `stats.tools` in the first adversary log.
 - [ ] **Gemini model pinning** — confirm preview access to Gemini 3.1 Pro so the
       run isn't refused for a silent model downgrade.
-- [ ] **Jira search** — confirm `/rest/api/3/search/jql` on Jira Cloud. If on Jira
-      Data Center, adapt `control/src/cq/engine/tracker.py` to the old `/search`.
+- [ ] **Jira search** — confirm `/rest/api/3/search/jql` on Jira Cloud. On Jira
+      Data Center, set `search_api: legacy` under `tracker` in `engine.yml`
+      (support added; confirm against a live instance).
 - [ ] Evaluate GitLab 19.4's experimental REST trigger for the agentic Code Review
       Flow (`POST /api/v4/ai/duo_workflows/workflows`) as a replacement for the quick action.
 
@@ -79,9 +80,10 @@ remove each entry as the capability lands.
 
 ## 5. This repository
 
-- [ ] Add CI (e.g. GitHub Actions) running the fast suite
-      (`tests.test_policy tests.test_units tests.test_templates tests.test_engine.Units`)
-      on every push, and the full suite nightly.
+- [x] Add CI (`.github/workflows/tests.yml`): fast suite on Python 3.9 and 3.13
+      for every push and PR; full suite on PRs and nightly.
 - [ ] Add a LICENSE.
-- [ ] Add a CHANGELOG and tag `v0.1.0` (matches `control/pyproject.toml`).
-- [ ] Consider a `CLAUDE.md` describing repo conventions for agent contributors.
+- [x] Add a CHANGELOG.
+- [ ] Tag `v0.1.0` once the import PR is merged into `main`.
+- [ ] Make `main` the default branch in GitHub settings.
+- [x] Add a `CLAUDE.md` describing repo conventions for agent contributors.

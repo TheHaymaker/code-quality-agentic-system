@@ -1,0 +1,62 @@
+# Settings for `cq engine`. Policy (tiers, evidence, budgets) stays in
+# policy/floor.yml; this file says how the engine reaches your tools.
+
+schema_version: 1
+
+# Where tickets come from and where filings go.
+#   jira:  Jira Cloud (basic auth: email + API token) or Data Center (bearer token).
+#   files: a folder of <KEY>.md files, for trying the engine without Jira.
+tracker:
+  kind: jira
+  base_url: https://your-company.atlassian.net      # [FILL IN]
+  auth: basic                                        # basic (Cloud) or bearer (Data Center)
+  email_env: JIRA_EMAIL
+  token_env: JIRA_API_TOKEN
+  issue_type: Task                                   # for filed findings and escalations
+  # kind: files
+  # dir: ~/cq-tickets
+
+# Jira labels the engine reads and writes. Labels cannot contain spaces.
+labels:
+  ready: agent-ready                 # you set this; the queue pulls these
+  in_progress: agent-in-progress
+  done: agent-done
+  needs_human: needs-human
+  needs_confirmation: needs-confirmation
+  confirmed: assumptions-confirmed   # you add this to accept the screener's assumptions
+  found: agent-found                 # filed findings
+  escalation: agent-escalation
+
+# Where the engine creates worktrees, and how it names branches. Keep this
+# outside ~/.cq: agents may not write in the run store.
+worktrees_dir: ~/cq-worktrees
+branch_prefix: "cq/"
+
+# Most runs the queue keeps open at once (runs that are not finished,
+# including runs waiting for you).
+wip_limit: 2
+
+# Claude Code, run headless (`claude -p`) once per agent.
+claude:
+  command: claude
+  timeout_seconds: 3600
+  max_turns: {screener: 30, planner: 60, plan_reviewer: 40, implementer: 200, test_author: 120,
+              reviewer: 80, verifier: 80, aggregator: 40, fixer: 150}
+  # Commands an implementer, test author, verifier or fixer may run besides git
+  # and the registered checks, as Claude Code permission rules. Single-test runs
+  # let the verifier prove a finding with one test.
+  extra_allowed_tools: ["Bash(pytest *)", "Bash(python -m pytest *)", "Bash(npx vitest *)",
+                        "Bash(npx jest *)", "Bash(npm test *)", "Bash(go test *)", "Bash(cargo test *)"]
+
+# How long to wait for outside services before the run is left WAITING.
+# `cq engine resume --waiting` (Hermes runs it on a schedule) picks them up again.
+waits:
+  duo_seconds: 900
+  sonar_seconds: 1800
+  poll_seconds: 30
+  # A run that has waited this long for the same thing on the same commit goes
+  # to you instead (0: never).
+  escalate_after_seconds: 14400
+
+# Most passes through the evidence loop before the engine gives up and asks you.
+max_passes: 14

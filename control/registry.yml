@@ -1,0 +1,53 @@
+# The repository registry. One entry per project the agents may work on.
+# Check commands are argument arrays. cq runs them without a shell.
+# Unknown fields are rejected. Run `cq doctor` after every edit.
+
+schema_version: 1
+
+# Applied to every repository. Use this for evidence you have not built yet.
+# Every report lists these, so a gap stays visible until you close it.
+defaults:
+  not_applicable: {}
+    # mutation: "Mutation testing is not set up yet"
+    # adversary: "No cross-vendor reviewer configured yet"
+
+repositories: []
+
+# Example entry. Copy it, remove the comment marks, and replace every value.
+#
+#  - id: storefront
+#    path: ~/code/storefront            # the main checkout, not a worktree
+#    remote: origin
+#    default_branch: main
+#    gitlab_project: group/storefront   # must match the remote
+#    jira_projects: [SHOP]
+#    sensitive: false                   # true: a file no rule covers stops the run
+#    checks:
+#      lint:        ["npm", "run", "lint"]
+#      types:       ["npm", "run", "typecheck"]
+#      unit:        ["npm", "test", "--", "--run"]
+#      build:       ["npm", "run", "build"]
+#      integration: ["npm", "run", "test:integration"]
+#      e2e:         ["npm", "run", "test:e2e"]
+#    check_timeout_seconds: 1800
+#    not_applicable:
+#      rollback_test: "No automated rollback test yet"
+#    paths:                             # control-side rules for this repo
+#      - {glob: "src/checkout/**", tier: 3, reason: "Conversion funnel"}
+#      - {glob: "src/billing/**",  tier: 3, reason: "Money movement"}
+#      - {glob: "src/auth/**",     tier: 3, reason: "Authentication"}
+#      - {glob: "src/api/**",      tier: 2, reason: "Public contract"}
+#      - {glob: "tools/**",        tier: 0, reason: "Internal scripts"}
+#    sonar:
+#      project_key: storefront
+#      host_url: https://sonarcloud.io  # or your SonarQube Server URL
+#      product: cloud                   # cloud or server
+#      organization: my-org             # cloud only
+#      auth: bearer                     # use basic for SonarQube Server 9.9 and older
+#      token_env: SONAR_TOKEN
+#      freshness: commit                # commit: the analysed commit must be the head.
+#                                       # time: compare times only. Use it if your merge
+#                                       # request pipelines analyse a merged-results commit.
+#    gate_files: ["**/Makefile", "**/pyproject.toml"]   # files that define what a check runs
+#    duo:
+#      username: GitLabDuo

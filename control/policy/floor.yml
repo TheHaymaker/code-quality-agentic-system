@@ -1,0 +1,97 @@
+# The global policy floor. It lives in the control repo, outside every project
+# the agents change. A project's own .cq/criticality.yml can raise a tier and
+# can never lower one. Each run pins a copy of this file when it starts.
+#
+# Tiers: 0 Low, 1 Standard, 2 High, 3 Critical.
+
+schema_version: 1
+
+# A file that no rule covers.
+default_tier: 1
+
+# Control-side path rules, applied to every repository. Per file, the highest
+# matching tier wins. Tier 0 can only be granted here or in registry.yml.
+paths:
+  - {glob: ".cq/**",                    tier: 3, reason: "Policy that judges the change"}
+  - {glob: ".claude/**",                tier: 3, reason: "Hooks, skills and agents that run the review"}
+  - {glob: ".gitlab-ci.yml",            tier: 3, reason: "CI gates"}
+  - {glob: "**/.gitlab-ci*.yml",        tier: 3, reason: "CI gates"}
+  - {glob: "sonar-project.properties",  tier: 3, reason: "Static-analysis scope"}
+  - {glob: "**/migrations/**",          tier: 3, reason: "Schema and data changes"}
+  - {glob: "**/CLAUDE.md",              tier: 3, reason: "Instructions every agent reads"}
+  - {glob: "**/AGENTS.md",              tier: 3, reason: "Instructions every agent reads"}
+  - {glob: ".mcp.json",                 tier: 3, reason: "Tools that agent sessions start"}
+  - {glob: ".gemini/**",                tier: 3, reason: "Gemini CLI settings"}
+  - {glob: "docs/**",                   tier: 0, reason: "Documentation"}
+  - {glob: "**/*.md",                   tier: 0, reason: "Documentation"}
+
+# Files an agent may not edit. The guard hook denies Edit and Write on these.
+# A change that reaches them another way still shows in the diff and is tier 3.
+protected:
+  - ".cq/**"
+  - ".claude/**"
+  - ".gitlab-ci.yml"
+  - "**/.gitlab-ci*.yml"
+  - "sonar-project.properties"
+  - ".mcp.json"
+  - ".gemini/**"
+
+# Branches with this prefix use tier 0 gates and are never ready to merge.
+tracer:
+  branch_prefix: "tracer/"
+
+# Fix rounds before the run stops and goes to a human.
+budgets:
+  fix_rounds_local: 2   # before the merge request exists
+  fix_rounds_mr: 3      # pushes made to answer Duo and SonarQube
+
+# The narrow second pass. After a fix, a reviewer's earlier review still counts
+# when a fix-diff review covers every commit since, and the change since that
+# review is small: at most max_lines, and at most max_percent of the whole
+# change. Past either limit the reviewer does a full review again.
+# A reviewer in never_for always reviews each fix itself.
+review_carry:
+  max_lines: 150
+  max_percent: 30
+  never_for: [security, final_check]
+
+# How SonarQube severities map to finding severities.
+sonar_severity_map: {BLOCKER: BLOCKER, CRITICAL: MAJOR, MAJOR: MAJOR, MINOR: MINOR, INFO: NIT}
+sonar_impact_map:   {BLOCKER: BLOCKER, HIGH: MAJOR, MEDIUM: MAJOR, LOW: MINOR, INFO: NIT}
+
+# Longest a human risk acceptance may last, in days.
+waiver_max_days: {0: 90, 1: 90, 2: 90, 3: 30}
+
+# Required evidence per tier. Each tier must include everything the tier below
+# requires. Check names refer to commands in registry.yml. A requirement a
+# repository cannot meet yet is marked not_applicable there, with a reason, and
+# every report lists it.
+gates:
+  0:
+    checks:    [lint, types, unit]
+    reviewers: [simplicity]
+    external:  []
+    notes:     []
+    approvals: []
+    human: "None."
+  1:
+    checks:    [lint, types, unit, build]
+    reviewers: [simplicity, structure, standards_spec]
+    external:  [duo, sonar]
+    notes:     []
+    approvals: []
+    human: "Approve from the report. No diff reading."
+  2:
+    checks:    [lint, types, unit, build, integration, mutation]
+    reviewers: [simplicity, structure, standards_spec, tests, security, adversary]
+    external:  [duo, sonar]
+    notes:     [plan, plan_review, rollback]
+    approvals: []
+    human: "Decide contested and major findings. Read the flagged hunks."
+  3:
+    checks:    [lint, types, unit, build, integration, mutation, e2e, rollback_test]
+    reviewers: [simplicity, structure, standards_spec, tests, security, adversary, adversary2, final_check]
+    external:  [duo, sonar]
+    notes:     [plan, plan_review, rollback]
+    approvals: [plan_approval, final_signoff]
+    human: "Approve the plan before code. Review the diff. Sign off."

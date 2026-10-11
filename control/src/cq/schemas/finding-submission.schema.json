@@ -1,0 +1,98 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "finding-submission.schema.json",
+  "title": "Reviewer submission",
+  "description": "What a reviewer hands to `cq findings add`. cq adds the source (reviewer, model, family) and the revision itself, so a reviewer cannot misreport them. Unknown fields are refused.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["scope", "files_reviewed", "findings"],
+  "properties": {
+    "scope": {
+      "enum": ["full", "fix_diff"],
+      "description": "full: the whole change, base to head. fix_diff: only the commits since reviewed_from."
+    },
+    "reviewed_from": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$",
+      "description": "fix_diff only: the commit the fix diff starts at."
+    },
+    "files_reviewed": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Every changed file you read. With files_skipped it must cover every changed file."
+    },
+    "files_skipped": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "reason"],
+        "properties": {
+          "path": {"type": "string"},
+          "reason": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "not_fixed": {
+      "type": "array",
+      "items": {"type": "string"},
+      "uniqueItems": true,
+      "description": "Ids, from the list in your brief, of findings that are marked fixed and are not fixed. cq reopens them."
+    },
+    "findings": {
+      "type": "array",
+      "description": "An empty array is a valid result. Do not invent findings.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["category", "severity", "claim"],
+        "properties": {
+          "local_id": {"type": "string"},
+          "category": {
+            "enum": ["correctness", "security", "data_integrity", "contract", "tests", "structure", "simplicity"]
+          },
+          "severity": {
+            "enum": ["BLOCKER", "MAJOR", "MINOR", "NIT"],
+            "description": "BLOCKER: wrong behaviour, data loss or a security hole. MAJOR: an edge-case defect, or real maintainability or test debt. MINOR: small clarity or consistency issue. NIT: taste."
+          },
+          "always_blocking": {
+            "enum": ["secret", "injection", "silent_data_loss", "breaking_contract", null],
+            "description": "Set only when the finding is one of these four. It then blocks at every tier."
+          },
+          "location": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path"],
+            "properties": {
+              "path": {"type": "string", "minLength": 1},
+              "start_line": {"type": ["integer", "null"], "minimum": 1},
+              "end_line": {"type": ["integer", "null"], "minimum": 1}
+            }
+          },
+          "claim": {"type": "string", "minLength": 1, "description": "What is wrong, in one or two sentences."},
+          "scenario": {
+            "type": ["string", "null"],
+            "description": "The concrete input or sequence that triggers the failure, or the named standard it breaks."
+          },
+          "proposed_fix": {"type": ["string", "null"], "description": "What you would change."},
+          "verification": {
+            "type": ["object", "null"],
+            "additionalProperties": false,
+            "required": ["method", "result"],
+            "properties": {
+              "method": {"enum": ["failing_test", "reproduced", "static_reasoning", "none"]},
+              "result": {"enum": ["reproduced", "not_reproduced", "not_run"]},
+              "evidence": {"type": "string"}
+            }
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Orders the work queue. It never changes a verdict."
+          }
+        }
+      }
+    }
+  }
+}

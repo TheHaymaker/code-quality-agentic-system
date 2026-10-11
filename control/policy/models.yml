@@ -1,0 +1,72 @@
+# Role to model routing. `cq models <run>` prints the row for the run's tier.
+# `cq engine` starts each agent session with these values; the cq-run skill
+# does the same when you drive a run by hand. Change a model here; no role
+# contract changes with it.
+
+schema_version: 1
+
+roles:
+  screener:
+    default: {model: claude-haiku-4-5-20251001, family: anthropic, effort: low}
+  planner:
+    default: {model: claude-opus-5-5, family: anthropic, effort: medium}
+    tiers:
+      2: {model: claude-fable-5-1, family: anthropic, effort: max}
+      3: {model: claude-fable-5-1, family: anthropic, effort: max}
+  # The implementer's family is what the adversary is compared against.
+  implementer:
+    default: {model: claude-sonnet-5-5, family: anthropic, effort: medium}
+    tiers:
+      2: {model: claude-opus-5-5, family: anthropic, effort: medium}
+      3: {model: claude-opus-5-5, family: anthropic, effort: medium}
+  reviewer:
+    default: {model: claude-opus-5-5, family: anthropic, effort: high}
+  verifier:
+    default: {model: claude-opus-5-5, family: anthropic, effort: high}
+  aggregator:
+    default: {model: claude-opus-5-5, family: anthropic, effort: high}
+    tiers:
+      3: {model: claude-fable-5-1, family: anthropic, effort: max}
+  fixer:
+    default: {model: claude-sonnet-5-5, family: anthropic, effort: medium}
+    tiers:
+      2: {model: claude-opus-5-5, family: anthropic, effort: medium}
+      3: {model: claude-opus-5-5, family: anthropic, effort: medium}
+  utility:
+    default: {model: claude-haiku-4-5-20251001, family: anthropic, effort: low}
+  # Writes the tests for the acceptance criteria. Never the implementer's session.
+  test_author:
+    default: {model: claude-sonnet-5-5, family: anthropic, effort: medium}
+  plan_reviewer:
+    default: {model: claude-opus-5-5, family: anthropic, effort: high}
+
+# The cross-vendor adversary: Gemini, through the Gemini CLI, read-only.
+# cq runs `argv` in the worktree, sends the review brief on stdin and reads the
+# answer from stdout. It stamps the model and family from this file on the
+# findings, and refuses the review if the CLI reports that another model ran
+# (the CLI can swap a preview model for an older one without failing).
+#
+# Needs GEMINI_API_KEY (or Vertex AI variables) in the environment.
+# `family` must differ from the implementer's family.
+adversary:
+  model: gemini-3.1-pro-preview
+  family: google
+  argv: [gemini, -m, gemini-3.1-pro-preview, -o, json, --approval-mode, default,
+         --policy, "{control}/policy/gemini-readonly.toml", -e, none,
+         -p, "Perform the review described above. Reply with exactly one JSON object and nothing else."]
+  env:
+    GEMINI_CLI_TRUST_WORKSPACE: "true"
+    GEMINI_CLI_SYSTEM_SETTINGS_PATH: "{control}/policy/gemini-settings.json"
+  timeout_seconds: 1800
+
+# The second adversary, tier 3 only. It must be a different model from the first.
+adversary2:
+  model: gemini-3.8-flash
+  family: google
+  argv: [gemini, -m, gemini-3.8-flash, -o, json, --approval-mode, default,
+         --policy, "{control}/policy/gemini-readonly.toml", -e, none,
+         -p, "Perform the review described above. Reply with exactly one JSON object and nothing else."]
+  env:
+    GEMINI_CLI_TRUST_WORKSPACE: "true"
+    GEMINI_CLI_SYSTEM_SETTINGS_PATH: "{control}/policy/gemini-settings.json"
+  timeout_seconds: 1800

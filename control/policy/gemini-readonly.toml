@@ -1,0 +1,12 @@
+# Gemini CLI policy for the adversary: it may read and search the repository,
+# and nothing else. No writes, no shell, no web, no MCP tools.
+[[rule]]
+toolName = ["read_file", "read_many_files", "glob", "grep_search", "list_directory"]
+decision = "allow"
+priority = 900
+
+[[rule]]
+toolName = "*"
+decision = "deny"
+priority = 800
+denyMessage = "Read-only review: only file read and search tools are allowed."

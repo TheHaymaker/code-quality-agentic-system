@@ -238,13 +238,22 @@ def run_external_reviewer(run: store.Run, slot: str, scope: str, reviewed_from: 
     env = dict(os.environ)
     env.update({k: v.replace("{control}", control) for k, v in spec.get("env", {}).items()})
     copy = export_head(Path(data["worktree"]), head)
-    from .engine.agents import run_group
+    from .engine.agents import Stream, run_group, session_name
+    stream = Stream(run.dir / "agents" / (session_name(slot) + ".stream.jsonl"))
+    stream.write({"type": "cq_session", "role": slot, "model": spec["model"], "mode": "read", "attempt": 1,
+                  "cwd": str(copy), "scope": scope, "external": spec["argv"][0]})
+
+    def end(ok: bool, error: Optional[str] = None, findings: Optional[int] = None) -> None:
+        stream.write({"type": "cq_end", "ok": ok, "error": error, "findings": findings, "cost_usd": None})
+
     try:
         code, stdout, stderr = run_group(argv, brief, copy, env, spec.get("timeout_seconds", 1800))
         proc = subprocess.CompletedProcess(argv, code, stdout, stderr)
     except FileNotFoundError:
+        end(False, "command not found")
         raise CqError("%s command not found: %s" % (slot, spec["argv"][0]))
     except subprocess.TimeoutExpired:
+        end(False, "timed out")
         raise CqError("%s timed out" % slot)
     finally:
         shutil.rmtree(copy, ignore_errors=True)
@@ -252,8 +261,15 @@ def run_external_reviewer(run: store.Run, slot: str, scope: str, reviewed_from: 
     log.parent.mkdir(parents=True, exist_ok=True)
     log.write_text("exit code %s\n--- stdout ---\n%s\n--- stderr ---\n%s\n" % (proc.returncode, proc.stdout, proc.stderr), encoding="utf-8")
     if proc.returncode != 0:
+        end(False, "exit code %d" % proc.returncode)
         raise CqError("%s exited with code %d. Output saved to %s" % (slot, proc.returncode, log))
-    return _unwrap(proc.stdout, spec["model"], slot, log)
+    try:
+        submission = _unwrap(proc.stdout, spec["model"], slot, log)
+    except CqError as exc:
+        end(False, str(exc)[:300])
+        raise
+    end(True, findings=len(submission.get("findings") or []) if isinstance(submission, dict) else None)
+    return submission
 
 
 def export_head(worktree: Path, head: str) -> Path:

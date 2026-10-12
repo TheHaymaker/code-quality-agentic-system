@@ -83,16 +83,38 @@ def match(table, text, default=None):
     return default
 
 
+STREAM = argv[argv.index("--output-format") + 1] == "stream-json"
+SESSION = argv[argv.index("--session-id") + 1] if "--session-id" in argv else "fake-session"
+
+
+def emit(event):
+    if STREAM:
+        print(json.dumps(event), flush=True)
+
+
+emit({"type": "system", "subtype": "init", "session_id": SESSION, "model": argv[argv.index("--model") + 1],
+      "tools": ["Read", "Bash"]})
+emit({"type": "assistant", "message": {"content": [
+    {"type": "text", "text": "Working as %s." % role},
+    {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "git diff --stat"}}]}})
+emit({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": "1 file changed"}]}})
+
+
 def reply(output, error=None):
     if error:
         result = {"type": "result", "subtype": "error_during_execution", "is_error": True,
-                  "errors": [error], "total_cost_usd": 0.001}
+                  "errors": [error], "total_cost_usd": 0.001, "session_id": SESSION}
         print(json.dumps(result))
         sys.exit(1)
     print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "done",
-                      "structured_output": output, "total_cost_usd": 0.01, "num_turns": 3}))
+                      "structured_output": output, "total_cost_usd": 0.01, "num_turns": 3, "session_id": SESSION,
+                      "modelUsage": {argv[argv.index("--model") + 1]: {"costUSD": 0.01}}}))
     sys.exit(0)
 
+
+if role == "implementer" and scenario.get("background_child"):
+    # Like `npm run dev &`: a child that outlives the session and holds its output pipes.
+    subprocess.Popen(["sleep", "60"])
 
 if n < scenario.get("fail", {}).get(role, 0):
     reply(None, "scripted failure of %s" % role)

@@ -16,4 +16,4 @@ cq = "cq.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-cq = ["schemas/*.json"]
+cq = ["schemas/*.json", "dashboard/*.html", "dashboard/fonts/*", "dashboard/lamps/*"]

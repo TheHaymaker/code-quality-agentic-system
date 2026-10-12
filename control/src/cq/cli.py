@@ -467,6 +467,29 @@ def cmd_engine(args: argparse.Namespace) -> int:
         result = core.stats()
         print(json.dumps(result, indent=2, sort_keys=True))
         return 0
+    if args.action == "mrs":
+        from .engine import inbox, settings as engine_settings
+        stale = args.stale_days if args.stale_days is not None else engine_settings.dashboard_settings()["stale_days"]
+        rows = inbox.mr_rows(include_closed=args.all, stale_days=stale)
+        if args.json:
+            print(json.dumps(rows, indent=2, sort_keys=True))
+            return 0
+        if not rows:
+            print("no open merge requests from cq")
+        for r in rows:
+            mr = r["mr"]
+            print("%-8s %-10s !%-5s %s" % (r["next"]["who"].upper(), r["ticket"] or "-", mr["iid"], mr.get("title") or ""))
+            print("         %s" % r["next"]["action"])
+            if r["next"].get("command"):
+                print("         -> %s" % r["next"]["command"])
+            if r["flags"]:
+                print("         [%s]" % " | ".join(f["text"] for f in r["flags"]))
+            print("         %s  (run %s)" % (mr.get("url") or "-", r["run_id"]))
+        return 0
+    if args.action == "watch":
+        from .engine import watch
+        ids = [store.find_run(r).dir.name for r in args.runs] or None
+        return watch.follow(ids, once=args.once, backlog=args.backlog)
     engine = core.Engine()
     if args.action == "run":
         outcomes = [engine.start(args.ticket, args.repo)]
@@ -479,6 +502,8 @@ def cmd_engine(args: argparse.Namespace) -> int:
             raise CqError("give a run id, or --waiting")
     elif args.action == "pull":
         outcomes = engine.pull(args.limit)
+    elif args.action == "update":
+        outcomes = [engine.update(store.find_run(args.run).dir.name, rebase=args.rebase)]
     else:
         outcomes = [engine.cancel(store.find_run(args.run).dir.name)]
     if args.json:
@@ -488,9 +513,21 @@ def cmd_engine(args: argparse.Namespace) -> int:
             _print_outcome(o)
         if not outcomes:
             print("nothing to do")
-    if len(outcomes) == 1 and args.action in ("run", "resume") and not getattr(args, "waiting", False):
+    if len(outcomes) == 1 and args.action in ("run", "resume", "update") and not getattr(args, "waiting", False):
         return core.EXIT_CODES.get(outcomes[0]["state"], 4)
     return 0
+
+
+def cmd_dashboard(args: argparse.Namespace) -> int:
+    from . import dashboard
+    from .engine import settings as engine_settings
+
+    settings = engine_settings.dashboard_settings()
+    if args.snapshot:
+        Path(args.snapshot).write_text(dashboard.render_snapshot(dashboard.Board(settings)), encoding="utf-8")
+        print("wrote %s" % args.snapshot)
+        return 0
+    return dashboard.serve(args.port or settings["port"], settings, open_browser=args.open)
 
 
 class _Parser(argparse.ArgumentParser):
@@ -698,12 +735,28 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--limit", type=int, default=1)
     a = gs.add_parser("cancel", help="stop a run; its branch and merge request are kept")
     a.add_argument("run")
+    a = gs.add_parser("update", help="merge the default branch into a run's branch (or --rebase), then check it again")
+    a.add_argument("run")
+    a.add_argument("--rebase", action="store_true", help="rebase and force-push with a lease instead of merging")
     a = gs.add_parser("status", help="engine runs and where each one stands")
     a.add_argument("run", nargs="?")
     gs.add_parser("stats", help="the numbers to measure the system by")
+    a = gs.add_parser("mrs", help="every open merge request cq raised: what it waits for and whose turn it is")
+    a.add_argument("--all", action="store_true", help="include merged and closed ones")
+    a.add_argument("--stale-days", type=float, help="flag merge requests idle this long (default from engine.yml)")
+    a = gs.add_parser("watch", help="follow agent sessions as they work (Ctrl-C to stop)")
+    a.add_argument("runs", nargs="*", help="run ids; default: every active run")
+    a.add_argument("--once", action="store_true", help="print what is there and exit")
+    a.add_argument("--backlog", type=int, default=40, help="earlier lines to show when following starts")
     for parser in gs.choices.values():
         parser.add_argument("--json", action="store_true")
     s.set_defaults(func=cmd_engine)
+
+    s = sub.add_parser("dashboard", help="a read-only page on this machine: repos, merge requests, runs, live agents")
+    s.add_argument("--port", type=int, help="default: dashboard.port in engine.yml, else 8765")
+    s.add_argument("--open", action="store_true", help="open it in your browser")
+    s.add_argument("--snapshot", metavar="FILE", help="write the page with its data to FILE and exit")
+    s.set_defaults(func=cmd_dashboard)
 
     s = sub.add_parser("guard", help="Claude Code PreToolUse hook: reads the hook payload on stdin")
     s.set_defaults(func=lambda args: guard.main())

@@ -2,6 +2,7 @@
 """A stand-in for the glab CLI, used by the tests. It serves a small GitLab from
 a JSON state file and records every call it receives."""
 import datetime
+import fcntl
 import json
 import os
 import re
@@ -10,6 +11,9 @@ import sys
 import urllib.parse
 
 path = os.environ["FAKE_GLAB_STATE"]
+# Calls can run in parallel (the inbox reads several merge requests at once). One at a time here.
+_lock = open(path + ".lock", "w")
+fcntl.flock(_lock, fcntl.LOCK_EX)
 with open(path) as fh:
     st = json.load(fh)
 args = sys.argv[1:]
@@ -67,10 +71,13 @@ def page(items):
 
 if p == "projects/:fullpath":
     out({"id": 7, "path_with_namespace": st["project"]})
+if p == "projects/7":
+    out({"id": 7, "path_with_namespace": st["project"], "merge_method": st.get("merge_method", "merge")})
 if p == "projects/7/merge_requests":
     if method == "POST":
+        iid = 12 + len(st["mrs"])
         mr = {
-            "iid": 12, "web_url": "https://gitlab.example/group/demo/-/merge_requests/12",
+            "iid": iid, "web_url": "https://gitlab.example/group/demo/-/merge_requests/%d" % iid,
             "source_branch": fields["source_branch"], "target_branch": fields["target_branch"],
             "title": fields["title"], "description": fields.get("description", ""), "sha": st["head"],
         }
@@ -114,7 +121,14 @@ if rest == "":
         mr.update(fields)
         out(mr)
     mr["sha"] = remote_head()
+    for key, value in (("state", "opened"), ("draft", True), ("has_conflicts", False), ("diverged_commits_count", 0),
+                       ("head_pipeline", None), ("detailed_merge_status", "draft_status"),
+                       ("updated_at", datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"))):
+        mr.setdefault(key, value)
+    mr.update(st.get("mr_overrides", {}))
     out(mr)
+if rest == "/approvals":
+    out(st.get("approvals", {"approvals_required": 0, "approvals_left": 0, "approved_by": []}))
 if rest == "/reviewers":
     out(st["reviewers"])
 if rest == "/discussions":

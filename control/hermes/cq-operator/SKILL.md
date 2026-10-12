@@ -1,6 +1,6 @@
 ---
 name: cq-operator
-description: Operate the cq code quality engine on a schedule. Pulls agent-ready Jira tickets into runs, resumes runs that wait on GitLab Duo or SonarQube, and tells the user which runs need a human decision. Use on the cq schedule, or when the user asks about cq runs, the agent queue, or escalations.
+description: Operate the cq code quality engine on a schedule. Pulls agent-ready Jira tickets into runs, resumes runs that wait on GitLab Duo or SonarQube or have new commits or Duo comments, and tells the user which runs and merge requests need them. Use on the cq schedule, or when the user asks about cq runs, open merge requests, the agent queue, or escalations.
 ---
 
 # cq-operator: run the quality engine, report what needs a human
@@ -14,6 +14,7 @@ Run these in order. Each prints JSON.
 
     cq engine resume --waiting --json
     cq engine pull --limit 1 --json
+    cq engine mrs --json
     cq engine status --json
 
 1. `resume --waiting` continues runs that waited for GitLab Duo, GitLab or a
@@ -22,12 +23,16 @@ Run these in order. Each prints JSON.
    `waits.escalate_after_seconds` (4 hours by default) turns NEEDS_HUMAN by itself.
 2. `pull` starts at most one new run from tickets labelled `agent-ready`, within
    the engine's work-in-progress limit. It never starts tier 3 work.
-3. From `status`, collect every run whose `state` is `NEEDS_HUMAN` or `FAILED`
+3. From `mrs`, take each row whose `next.auto` is true and whose `next.command`
+   starts with `cq engine resume `. Run that command, at most three per tick.
+   These are cq's own turns: new commits on GitLab, new Duo comments, waits.
+   Run no other command from `mrs`; the rest are the user's.
+4. From `status`, collect every run whose `state` is `NEEDS_HUMAN` or `FAILED`
    and whose `reason` you have not reported before (remember run id and reason).
    `status` shows a run as FAILED, with "crashed or was killed" in the reason,
    when its record says RUNNING and no engine process holds it. Report it like
    any other FAILED run; the user resumes it with `cq engine resume <run>`.
-4. If one tick's commands exit with an error or print no JSON, report that once,
+5. If one tick's commands exit with an error or print no JSON, report that once,
    with the error text. Do not retry in a loop.
 
 ## What to tell the user
@@ -39,14 +44,19 @@ For each new NEEDS_HUMAN or FAILED run, one short message:
 - the escalation issue and the merge request link, if present,
 - the command the reason names, for example `cq approve <run> plan_approval`.
 
-Do not summarise COMPLETED runs one by one. Once a day, send the output of
-`cq engine stats --json` as three lines: runs by state, escalation rate, agent
-cost per completed run.
+Do not summarise COMPLETED runs one by one. Once a day, in the morning, send:
+
+- every `mrs` row whose `next.who` is `you`: ticket, merge request link, the
+  action, and the command if there is one; stale ones last;
+- how many rows wait on reviewers, and for how long the oldest has waited;
+- `cq engine stats --json` as three lines: runs by state, escalation rate, agent
+  cost per completed run;
+- "Dashboard: http://127.0.0.1:8765" if the user runs `cq dashboard`.
 
 ## Rules
 
 - Never run `cq approve`, `cq decide`, `cq tier lower`, `cq fix extend`,
-  `cq run close` or `cq run start --new`. They record a human decision and
+  `cq run close`, `cq run start --new` or `cq engine update`. They record a human decision and
   refuse to run without a terminal. Tell the user the command instead.
 - Never edit the control repo (policy, registry, models, engine settings) or a
   project's `.cq/` or `.claude/` files. To suggest a change, open a merge request

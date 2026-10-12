@@ -77,5 +77,6 @@ Next:
   4. cq doctor                                    checks everything
   5. cq engine run <TICKET>                       one ticket, end to end
      Hermes: copy $DEST/hermes/cq-operator into your Hermes skills folder.
-  6. Full test suite, about three minutes:  (cd $DEST && .venv/bin/python -m unittest discover -s tests)
+  6. cq dashboard --open                          watch repos, merge requests and runs
+  7. Full test suite, about six minutes:  (cd $DEST && .venv/bin/python -m unittest discover -s tests)
 MSG

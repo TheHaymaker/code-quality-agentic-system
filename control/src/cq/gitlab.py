@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from . import config, findings as F, store
-from .util import CqError, git, iso, now, parse_time
+from .util import CqError, git, iso, now, parse_time, remote_branch_head
 
 REPORT_START = "<!-- cq:report:start -->"
 REPORT_END = "<!-- cq:report:end -->"
@@ -111,7 +111,7 @@ def mr_ensure(run: store.Run) -> Dict[str, Any]:
     repo = run.policy()["repo"]
     if data.get("mr"):
         return data["mr"]
-    remote_head = git(worktree, "ls-remote", "--heads", repo["remote"], data["branch"], check=False).split("\t")[0]
+    remote_head = remote_branch_head(worktree, repo["remote"], data["branch"])
     if not remote_head:
         raise CqError("branch '%s' is not on %s. Push it first." % (data["branch"], repo["remote"]))
     pid = project_id(run)

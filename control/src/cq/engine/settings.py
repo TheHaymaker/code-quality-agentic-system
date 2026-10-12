@@ -51,6 +51,7 @@ SCHEMA = {
                               "properties": {r: {"type": "integer", "minimum": 1} for r in _ROLES}},
                 "extra_allowed_tools": {"type": "array", "items": {"type": "string"}},
                 "max_budget_usd": {"type": "number", "exclusiveMinimum": 0},
+                "keep_sessions": {"type": "boolean"},
             },
         },
         "waits": {
@@ -61,8 +62,28 @@ SCHEMA = {
                            for k in ["duo_seconds", "sonar_seconds", "poll_seconds", "escalate_after_seconds"]},
         },
         "max_passes": {"type": "integer", "minimum": 2},
+        "dashboard": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+                "stale_days": {"type": "number", "minimum": 0},
+                "refresh_seconds": {"type": "integer", "minimum": 10},
+            },
+        },
     },
 }
+
+
+DASHBOARD = {"port": 8765, "stale_days": 7, "refresh_seconds": 60}
+
+
+def dashboard_settings() -> Dict[str, Any]:
+    """The dashboard and the inbox work without a valid engine.yml (runs started by hand)."""
+    try:
+        return load()["dashboard"]
+    except CqError:
+        return dict(DASHBOARD)
 
 
 def load(root: Path = None) -> Dict[str, Any]:
@@ -82,6 +103,7 @@ def load(root: Path = None) -> Dict[str, Any]:
     elif not tracker.get("dir"):
         raise CqError("engine.yml: a files tracker needs dir")
     data["claude"].setdefault("extra_allowed_tools", [])
+    data["dashboard"] = dict(DASHBOARD, **data.get("dashboard", {}))
     data["waits"].setdefault("escalate_after_seconds", 14400)
     data["worktrees_dir"] = str(Path(data["worktrees_dir"]).expanduser())
     return data

@@ -60,14 +60,16 @@ control/                    becomes your control repo; keep it outside every pro
     gitlab.py, sonar.py     GitLab Duo and SonarQube integration
     guard.py                gate guard (deleted/skipped tests, check config edits)
     store.py, runs.py       run store under ~/.cq/runs/
-    engine/                 the run engine: agents, prompts, Jira tracker, core loop
+    engine/                 the run engine: agents, prompts, Jira tracker, core loop,
+                            merge request inbox (inbox.py), live session view (watch.py)
+    dashboard/              local read-only dashboard: one page, lamps, fonts (SIL OFL)
     schemas/                JSON schema for reviewer submissions
   templates/                what `cq init-repo` puts into a project
     cq/                     criticality.yml, coding standards, business-critical map
     claude/skills/          cq-screen, cq-run, cq-panel, cq-aggregate, cq-mr-loop
     claude/agents/          cq-reviewer, cq-verifier, cq-fixer, cq-plan-reviewer
   hermes/cq-operator/       Hermes skill that runs the engine on a schedule
-  tests/                    225 tests: policy contract, units, templates, e2e, engine (fakes for glab/claude/gemini)
+  tests/                    240 tests: policy contract, units, templates, e2e, engine (fakes for glab/claude/gemini)
 ```
 
 ## Quick start
@@ -99,6 +101,10 @@ cq engine resume --waiting     every run waiting on Duo or SonarQube
 cq engine pull --limit 1       start runs for agent-ready tickets, within the WIP limit
 cq engine status | stats       where each run stands; the numbers to measure by
 cq engine cancel <run>         stop; branch and merge request are kept
+cq engine watch [<run>]        follow agent sessions live (default: every active run)
+cq engine mrs                  every open cq merge request: what it waits for, whose turn
+cq engine update <run> [--rebase]  bring main into the branch, then check the change again
+cq dashboard [--open]          the local dashboard at http://127.0.0.1:8765
 ```
 
 See [`docs/system-guide.md`](docs/system-guide.md#driving-a-run-by-hand) for
@@ -131,7 +137,7 @@ Or from an installed control repo:
 cd ~/cq-control && .venv/bin/python -m unittest discover -s tests
 ```
 
-About three and a half minutes. CI (`.github/workflows/tests.yml`) runs the
+About six minutes. CI (`.github/workflows/tests.yml`) runs the
 fast suite on every push and the full suite on pull requests and nightly. `tests/test_policy.py` is the contract: same
 input, same verdict; missing or stale evidence is never a pass. The tests use
 their own copy of the policy, so edits to `policy/floor.yml` do not break them.

@@ -6,6 +6,16 @@ All notable changes to this project are recorded here. Versions follow
 ## Unreleased
 
 ### Added
+- Streaming agent sessions: every session runs with `--output-format stream-json`
+  into `~/.cq/runs/<run>/agents/*.stream.jsonl`; `cq engine watch` shows one line
+  per step. `claude.keep_sessions` (default true) keeps sessions for `claude --resume`.
+- Merge request inbox: `cq engine mrs` lists every open cq merge request with the
+  next action and whose turn it is; `cq engine update <run> [--rebase]` brings the
+  default branch in. Commits pushed on GitLab are taken in by fast-forward; diverged
+  history stops the run; Duo comments after the decision are read on every pass.
+- `cq dashboard`: a local, read-only page on 127.0.0.1 (turn board, runs, per-repo
+  numbers, live sessions); `--snapshot` writes a self-contained copy. New
+  `dashboard` section in `engine.yml`.
 - `tracker.search_api` in `engine.yml`: `jql` (default, Jira Cloud
   `/rest/api/3/search/jql`) or `legacy` (Jira Data Center `/rest/api/2/search`,
   offset pagination).

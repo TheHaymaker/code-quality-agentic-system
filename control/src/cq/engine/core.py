@@ -20,9 +20,11 @@ import contextlib
 import copy
 import fcntl
 import json
+import os
 import re
 import shlex
 import shutil
+import subprocess
 import tempfile
 import time
 import traceback
@@ -30,7 +32,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from .. import briefs, config, findings as F, gitlab, policy, reviews, runs, sonar, store, verdicts
-from ..util import CqError, git, git_ok, iso, now, parse_time, read_json, sha256_text, write_json
+from ..util import CqError, git, git_ok, iso, now, parse_time, read_json, remote_branch_head, sha256_text, write_json
 from . import agents, prompts, settings as engine_settings, tracker as trackers
 
 RUNNING, WAITING, NEEDS_HUMAN, COMPLETED, FAILED, CANCELLED = (
@@ -288,6 +290,54 @@ class Engine:
             self._ticket_labels(run, remove=[self.labels["in_progress"]])
         return {"run_id": run.dir.name, "state": rec["state"], "reason": rec.get("reason")}
 
+    def update(self, run_id: str, rebase: bool = False) -> Dict[str, Any]:
+        """Bring the default branch into the run's branch, then drive the run
+        again. A merge keeps every reviewed commit; --rebase rewrites the branch
+        and force-pushes it with a lease. Either way the change is checked and
+        reviewed again. A conflict stops before anything is pushed."""
+        run = store.find_run(run_id)
+        if run.data["status"] != "active":
+            raise CqError("run %s is closed" % run.dir.name)
+        if not self.record(run):
+            raise CqError("run %s was not started by the engine" % run.dir.name)
+        if self.record(run).get("state") == CANCELLED or (run.dir / "cancel.flag").exists():
+            raise CqError("run %s was cancelled" % run.dir.name)
+        with _exclusive(run.dir / "engine.lock", run.dir.name):
+            data = runs.sync(run)
+            if data["dirty"]:
+                raise CqError("the worktree %s has uncommitted changes" % data["worktree"])
+            repo = run.policy()["repo"]
+            worktree = Path(data["worktree"])
+            remote, branch = repo["remote"], data["branch"]
+            target = "%s/%s" % (remote, repo["default_branch"])
+            git(worktree, "fetch", "--quiet", remote)
+            before = data["head_sha"]
+            if git_ok(worktree, "merge-base", "--is-ancestor", target, "HEAD"):
+                run.event("branch_update", {"result": "up to date", "target": target})
+            else:
+                remote_head = remote_branch_head(worktree, remote, branch)
+                if remote_head and remote_head != before:
+                    raise CqError("GitLab has commits on %s that the worktree does not. Run `cq engine resume %s` "
+                                  "first, so the engine takes them in." % (branch, run.dir.name))
+                verb = ["rebase", "--quiet", target] if rebase else ["merge", "--quiet", "--no-edit", target]
+                proc = subprocess.run(["git", "-C", str(worktree), *verb], capture_output=True, text=True,
+                                      env=dict(os.environ, GIT_MERGE_AUTOEDIT="no", GIT_EDITOR="true"))
+                if proc.returncode != 0:
+                    conflicts = git(worktree, "diff", "--name-only", "--diff-filter=U", check=False).split()
+                    git(worktree, "rebase" if rebase else "merge", "--abort", check=False)
+                    reason = ("%s %s into %s conflicts in: %s. Resolve it yourself in %s, commit, then: cq engine resume %s"
+                              % ("Rebasing onto" if rebase else "Merging", target, branch,
+                                 ", ".join(conflicts) or (proc.stderr or proc.stdout).strip()[:200], worktree, run.dir.name))
+                    run.event("branch_update", {"result": "conflict", "files": conflicts, "rebase": rebase})
+                    return self._outcome(run, self._state(run, NEEDS_HUMAN, "update", reason))
+                if rebase and remote_head:
+                    git(worktree, "push", "--quiet", "--force-with-lease=refs/heads/%s:%s" % (branch, remote_head),
+                        remote, "HEAD:refs/heads/%s" % branch)
+                run.event("branch_update", {"result": "rebased" if rebase else "merged", "target": target,
+                                            "from": before, "to": git(worktree, "rev-parse", "HEAD")})
+                runs.sync(run)
+        return self._drive(run)
+
     # == intake ===============================================================
 
     def _repo_for(self, ticket: Dict[str, Any], control: Dict[str, Any], repo_id: Optional[str]) -> Dict[str, Any]:
@@ -407,6 +457,7 @@ class Engine:
                     # change that: the draft goes to a human now.
                     return self._decide(run, early=reasons)
                 self._state(run, RUNNING, "merge_request", "")
+                self._refresh_duo(run)
                 self._converge(run, "mr")
                 return self._decide(run)
             except Stop as stop:
@@ -976,12 +1027,38 @@ class Engine:
     # == merge request ============================================================
 
     def _push(self, run: store.Run) -> None:
+        """Make GitLab's branch and the worktree agree. New commits on GitLab (a
+        suggestion applied in the web UI, a push by a colleague) are taken in by
+        fast-forward and reviewed like any other change. Diverged history goes to
+        a human: the engine never force-pushes on its own."""
         data = run.data
         repo = run.policy()["repo"]
         worktree = Path(data["worktree"])
-        remote_head = git(worktree, "ls-remote", "--heads", repo["remote"], data["branch"], check=False).split("\t")[0]
-        if remote_head != data["head_sha"]:
-            git(worktree, "push", "--quiet", "-u", repo["remote"], "HEAD:refs/heads/%s" % data["branch"])
+        remote, branch = repo["remote"], data["branch"]
+        remote_head = remote_branch_head(worktree, remote, branch)
+        head = data["head_sha"]
+        if not remote_head or remote_head == head:
+            if not remote_head:
+                git(worktree, "push", "--quiet", "-u", remote, "HEAD:refs/heads/%s" % branch)
+            return
+        if not git_ok(worktree, "cat-file", "-e", remote_head + "^{commit}"):
+            git(worktree, "fetch", "--quiet", remote, "+refs/heads/%s:refs/remotes/%s/%s" % (branch, remote, branch))
+        if git_ok(worktree, "merge-base", "--is-ancestor", remote_head, head):
+            git(worktree, "push", "--quiet", "-u", remote, "HEAD:refs/heads/%s" % branch)
+            return
+        if git_ok(worktree, "merge-base", "--is-ancestor", head, remote_head):
+            if runs.sync(run)["dirty"]:
+                raise Stop(FAILED, "GitLab has new commits on %s, and the worktree has uncommitted changes." % branch)
+            git(worktree, "merge", "--quiet", "--ff-only", remote_head)
+            run.event("engine_adopted_remote_commits", {"from": head, "to": remote_head}, "engine")
+            runs.sync(run)
+            return
+        raise Stop(NEEDS_HUMAN, (
+            "The branch %s on GitLab (%s) and the worktree (%s) have diverged. Keep GitLab's version: "
+            "git -C %s reset --hard %s. Or keep the worktree's: git -C %s push --force-with-lease %s HEAD:%s. "
+            "Then: cq engine resume %s") % (
+            branch, remote_head[:12], head[:12], worktree, remote_head[:12], worktree, remote, branch, run.dir.name),
+            escalate=True)
 
     def _publish(self, run: store.Run) -> None:
         runs.sync(run)
@@ -993,6 +1070,19 @@ class Engine:
             self._update(run, published=True)
         verdicts.decide(run, "final")
         gitlab.mr_describe(run, (run.dir / "report.md").read_text(encoding="utf-8"))
+
+    def _refresh_duo(self, run: store.Run) -> None:
+        """Duo can comment again on a commit it already reviewed (automatic
+        reviews, a colleague's request). Read its threads again on every pass
+        through the merge request, so a resume sees them."""
+        evidence = run.external().get("duo")
+        if "duo" not in self._gate(run)["external"] or not evidence:
+            return
+        if evidence.get("requested_head") == run.data["head_sha"] and evidence["state"] == "reviewed":
+            try:
+                gitlab.duo_ingest(run)
+            except CqError as exc:
+                run.event("engine_duo_refresh_failed", {"error": str(exc)}, "engine")
 
     def _collect_external(self, run: store.Run, codes: set) -> bool:
         gate = self._gate(run)
@@ -1066,7 +1156,7 @@ class Engine:
                 # Waiting does not fix a missing or refused token.
                 raise Stop(NEEDS_HUMAN, "SonarQube refused the request: %s" % detail, escalate=True)
             if (now() - parse_time(started)).total_seconds() >= waits["sonar_seconds"]:
-                raise Stop(WAITING, "Waiting for a SonarQube analysis of %s (%s)." % (head[:12], detail), key="sonar")
+                raise Stop(WAITING, "Waiting for a SonarQube analysis of %s: %s" % (head[:12], detail.rstrip(".") + "."), key="sonar")
             time.sleep(max(1, waits["poll_seconds"]))
 
     def _answer_duo(self, run: store.Run) -> bool:

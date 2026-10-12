@@ -379,6 +379,12 @@ def sync(run: store.Run) -> Dict[str, Any]:
             data["base_sha"] = git(worktree, "merge-base", data["base_ref"], "HEAD")
             shas = []
             run.event("history_rewritten", {"new_base": data["base_sha"], "head": head})
+        # The default branch merged or rebased in: the change is measured from where it now forks.
+        fork = git(worktree, "merge-base", data["base_ref"], "HEAD", check=False)
+        # Not when the branch itself is merged (fork == head): that would empty the diff.
+        if fork and fork != head and fork != data["base_sha"] and git_ok(worktree, "merge-base", "--is-ancestor", data["base_sha"], fork):
+            run.event("base_moved", {"from": data["base_sha"], "to": fork, "head": head})
+            data["base_sha"] = fork
         if not shas:
             shas = [head]
         elif shas[-1] != head:

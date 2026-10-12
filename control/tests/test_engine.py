@@ -179,7 +179,8 @@ class EngineEnv(Env):
 
     def sonar_ok(self):
         fresh = (datetime.datetime.now(UTC) + datetime.timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S+0000")
-        FakeSonar.state = {"prs": [{"key": "12", "analysisDate": fresh}], "gate": {"status": "OK", "conditions": []}}
+        FakeSonar.state = {"prs": [{"key": str(n), "analysisDate": fresh} for n in range(12, 40)],
+                           "gate": {"status": "OK", "conditions": []}}
 
     def gemini(self, tier_models=True, **scenario):
         path = self.control / "policy" / "models.yml"
@@ -532,6 +533,14 @@ class Recovery(EngineEnv):
         self.assertEqual(out["state"], "NEEDS_HUMAN", out)
         self.assertIn("SonarQube refused", out["reason"])
 
+    def test_a_child_left_running_by_an_agent_does_not_hang_the_engine(self):
+        import time as _time
+        self.scenario({"background_child": True})
+        started = _time.time()
+        code, out = self.run_ticket()
+        self.assertEqual(out["state"], "COMPLETED", out)
+        self.assertLess(_time.time() - started, 40)
+
     def test_second_engine_on_the_same_run_is_refused(self):
         code, out = self.run_ticket()
         run = store.find_run(out["run_id"])
@@ -693,6 +702,247 @@ class Guard(EngineEnv):
             self.assertIn("never rewrites", bash("git reset --hard HEAD~1"))
             self.assertIsNone(bash("git commit -m 'Fix f-1'"))
             self.assertIsNone(guard.decide({"tool_name": "Bash", "tool_input": {"command": "pytest -q"}, "cwd": str(scratch)}))
+
+
+class Streams(EngineEnv):
+    def test_sessions_stream_to_files_and_watch_prints_them(self):
+        code, out = self.run_ticket()
+        run = store.find_run(out["run_id"])
+        files = sorted((run.dir / "agents").glob("*.stream.jsonl"))
+        self.assertGreaterEqual(len(files), 6)
+        events = [json.loads(l)["event"] for l in files[0].read_text().splitlines()]
+        self.assertEqual(events[0]["type"], "cq_session")
+        self.assertEqual(events[-1]["type"], "cq_end")
+        self.assertTrue(any(e.get("type") == "result" for e in events))
+        argv = self.calls()["log"][0]["argv"]
+        self.assertEqual(argv[argv.index("--output-format") + 1], "stream-json")
+        self.assertIn("--verbose", argv)
+        code, text = self.cq("engine", "watch", out["run_id"], "--once")
+        self.assertEqual(code, 0)
+        self.assertIn("implementer", text)
+        self.assertIn("▸ Bash git diff --stat", text)
+        self.assertIn("■ done", text)
+
+    def test_kept_sessions_can_be_resumed_in_claude_code(self):
+        cfg = json.loads((self.control / "engine.yml").read_text())
+        cfg["claude"]["keep_sessions"] = True
+        (self.control / "engine.yml").write_text(json.dumps(cfg))
+        code, out = self.run_ticket()
+        argv = self.calls()["log"][-1]["argv"]
+        self.assertIn("--session-id", argv)
+        self.assertNotIn("--no-session-persistence", argv)
+        code, text = self.cq("engine", "watch", out["run_id"], "--once")
+        self.assertIn("claude --resume %s" % argv[argv.index("--session-id") + 1], text)
+
+
+class Lifecycle(EngineEnv):
+    def other_clone(self):
+        other = self.tmp / "other"
+        if not other.exists():
+            self.git(self.tmp, "clone", "-q", str(self.remote), str(other))
+        self.git(other, "fetch", "-q", "origin")
+        return other
+
+    def push_to_branch(self, rel, text):
+        other = self.other_clone()
+        self.git(other, "checkout", "-q", "-B", "cq/shop-1", "origin/cq/shop-1")
+        self.commit(rel, text, "colleague", cwd=other)
+        self.git(other, "push", "-q", "origin", "cq/shop-1")
+        return self.git(other, "rev-parse", "HEAD")
+
+    def push_to_main(self, rel, text):
+        other = self.other_clone()
+        self.git(other, "checkout", "-q", "-B", "main", "origin/main")
+        self.commit(rel, text, "main moves on", cwd=other)
+        self.git(other, "push", "-q", "origin", "main")
+        return self.git(other, "rev-parse", "HEAD")
+
+    def test_commits_pushed_on_gitlab_are_taken_in_and_checked(self):
+        code, out = self.run_ticket()
+        remote_head = self.push_to_branch("src/extra.py", "X = 1\n")
+        code, again = self.engine("resume", out["run_id"])
+        self.assertEqual(again[0]["state"], "COMPLETED", again)
+        run = store.find_run(out["run_id"])
+        self.assertEqual(run.data["head_sha"], remote_head)
+        self.assertIn("src/extra.py", run.data["changed_files"])
+        self.assertEqual(self.calls()["calls"]["reviewer:structure"], 2)
+
+    def test_a_branch_with_a_similar_name_is_not_taken_for_the_run_branch(self):
+        code, out = self.run_ticket()
+        other = self.other_clone()
+        self.git(other, "checkout", "-q", "-B", "backup/cq/shop-1", "origin/main")
+        self.commit("src/backup.py", "B = 1\n", "backup", cwd=other)
+        self.git(other, "push", "-q", "origin", "backup/cq/shop-1")
+        code, again = self.engine("resume", out["run_id"])
+        self.assertEqual(again[0]["state"], "COMPLETED", again)
+        self.assertNotIn("src/backup.py", store.find_run(out["run_id"]).data["changed_files"])
+
+    def test_diverged_branch_goes_to_a_human(self):
+        code, out = self.run_ticket()
+        self.push_to_branch("src/extra.py", "X = 1\n")
+        run = store.find_run(out["run_id"])
+        self.commit("src/local.py", "Y = 2\n", "local", cwd=run.data["worktree"])
+        code, again = self.engine("resume", out["run_id"])
+        self.assertEqual(again[0]["state"], "NEEDS_HUMAN", again)
+        self.assertIn("diverged", again[0]["reason"])
+
+    def test_update_merges_main_and_measures_from_the_new_fork(self):
+        code, out = self.run_ticket()
+        main_head = self.push_to_main("README.md", "# demo, new\n")
+        code, upd = self.engine("update", out["run_id"])
+        self.assertEqual((code, upd[0]["state"]), (0, "COMPLETED"), upd)
+        run = store.find_run(out["run_id"])
+        self.assertEqual(run.data["base_sha"], main_head)
+        self.assertNotIn("README.md", run.data["changed_files"])
+        self.assertEqual(self.git(run.data["worktree"], "rev-parse", "HEAD"),
+                         self.git(self.remote, "rev-parse", "refs/heads/cq/shop-1"))
+
+    def test_update_that_conflicts_stops_before_pushing(self):
+        code, out = self.run_ticket()
+        self.push_to_main("src/app.py", "def page(n):\n    return abs(n)\n")
+        run = store.find_run(out["run_id"])
+        before = self.git(self.remote, "rev-parse", "refs/heads/cq/shop-1")
+        code, upd = self.engine("update", out["run_id"])
+        self.assertEqual(upd[0]["state"], "NEEDS_HUMAN", upd)
+        self.assertIn("conflicts in: src/app.py", upd[0]["reason"])
+        self.assertEqual(self.git(run.data["worktree"], "status", "--porcelain"), "")
+        self.assertEqual(self.git(self.remote, "rev-parse", "refs/heads/cq/shop-1"), before)
+
+    def test_update_rebase_force_pushes_with_a_lease(self):
+        code, out = self.run_ticket()
+        main_head = self.push_to_main("README.md", "# demo, new\n")
+        code, upd = self.engine("update", out["run_id"], "--rebase")
+        self.assertEqual(upd[0]["state"], "COMPLETED", upd)
+        run = store.find_run(out["run_id"])
+        head = self.git(run.data["worktree"], "rev-parse", "HEAD")
+        self.assertEqual(self.git(self.remote, "rev-parse", "refs/heads/cq/shop-1"), head)
+        self.git(run.data["worktree"], "merge-base", "--is-ancestor", main_head, head)
+        self.assertEqual(self.git(run.data["worktree"], "rev-list", "--merges", "--count", "%s..HEAD" % main_head), "0")
+
+    def test_new_duo_comments_are_read_on_resume(self):
+        code, out = self.run_ticket()
+        run = store.find_run(out["run_id"])
+        st = self.glab()
+        st["discussions"].append({"id": "late-duo", "individual_note": False, "notes": [{
+            "id": 501, "body": "Consider naming n page_number", "author": {"username": "GitLabDuo"}, "system": False,
+            "resolvable": True, "resolved": False, "created_at": "2026-10-10T00:00:00Z",
+            "position": {"new_path": "src/app.py", "new_line": 1, "head_sha": run.data["head_sha"]}}]})
+        self.glab_state.write_text(json.dumps(st))
+        code, rows = self.engine("mrs")
+        self.assertEqual((rows[0]["next"]["who"], rows[0]["next"]["auto"]), ("cq", True))
+        code, again = self.engine("resume", out["run_id"])
+        self.assertEqual(again[0]["state"], "COMPLETED", again)
+        thread = [d for d in self.glab()["discussions"] if d["id"] == "late-duo"][0]
+        self.assertTrue(thread["notes"][0]["resolved"])
+
+
+class Inbox(EngineEnv):
+    def row(self, *args):
+        code, rows = self.engine("mrs", *args)
+        self.assertEqual(code, 0)
+        return rows
+
+    def override(self, **fields):
+        st = self.glab()
+        st.setdefault("mr_overrides", {}).update(fields)
+        self.glab_state.write_text(json.dumps(st))
+
+    def test_next_action_and_whose_turn(self):
+        code, out = self.run_ticket()
+        (r,) = self.row()
+        self.assertEqual(r["next"]["who"], "you")
+        self.assertIn("Review the draft", r["next"]["action"])
+        self.override(diverged_commits_count=3)
+        self.set_glab(merge_method="ff")
+        (r,) = self.row()
+        self.assertEqual(r["next"]["command"], "cq engine update %s --rebase" % out["run_id"])
+        self.assertIn("behind", [f["code"] for f in r["flags"]])
+        self.override(has_conflicts=True)
+        (r,) = self.row()
+        self.assertIn("Resolve the conflicts", r["next"]["action"])
+        self.override(has_conflicts=False, diverged_commits_count=0, draft=False, updated_at="2026-01-01T00:00:00Z")
+        self.set_glab(approvals={"approvals_left": 1, "approved_by": []},
+                      reviewers=[{"user": {"username": "GitLabDuo"}, "state": "reviewed"}, {"user": {"username": "ana"}, "state": "unreviewed"}])
+        (r,) = self.row()
+        self.assertEqual(r["next"]["who"], "reviewer")
+        self.assertIn("@ana", r["next"]["action"])
+        self.assertIn("stale", [f["code"] for f in r["flags"]])
+        st = self.glab()
+        st["discussions"].append({"id": "h1", "notes": [{"id": 9, "body": "Why max?", "author": {"username": "ana"},
+                                  "system": False, "resolvable": True, "resolved": False}]})
+        self.glab_state.write_text(json.dumps(st))
+        (r,) = self.row()
+        self.assertEqual(r["next"]["who"], "you")
+        self.assertIn("open thread from reviewers", r["next"]["action"])
+        code, c = self.engine("cancel", out["run_id"])
+        (r,) = self.row()
+        self.assertIn("no longer works on this merge request", r["next"]["action"])
+        self.assertFalse(r["next"]["auto"])
+        self.override(state="merged")
+        self.assertEqual(self.row(), [])
+        self.assertEqual(self.row("--all")[0]["next"]["action"], "Merged.")
+
+
+class Dashboard(EngineEnv):
+    def serve(self):
+        from cq import dashboard
+        board = dashboard.Board({"stale_days": 7, "refresh_seconds": 60, "port": 0})
+        board.refresh()
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), dashboard.make_handler(board, 0))
+        port = server.server_address[1]
+        server.RequestHandlerClass = dashboard.make_handler(board, port)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return port
+
+    def get(self, port, path, host=None, method="GET"):
+        import http.client
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        conn.request(method, path, headers={"Host": host or "127.0.0.1:%d" % port})
+        res = conn.getresponse()
+        body = res.read()
+        conn.close()
+        return res.status, body
+
+    def test_page_and_api_are_read_only_and_local(self):
+        code, out = self.run_ticket()
+        port = self.serve()
+        status, body = self.get(port, "/")
+        self.assertEqual(status, 200)
+        self.assertIn(b"Your turn", body)
+        self.assertEqual(self.get(port, "/fonts/tiny5.woff2")[0], 200)
+        status, lens = self.get(port, "/lamps/lit.png")
+        self.assertEqual((status, lens[1:4]), (200, b"PNG"))
+        status, body = self.get(port, "/api/state")
+        data = json.loads(body)
+        (item,) = data["items"]
+        self.assertEqual((item["who"], item["run_id"]), ("you", out["run_id"]))
+        self.assertEqual(data["repos"][0]["id"], "demo")
+        self.assertEqual(data["runs"][0]["state"], "COMPLETED")
+        status, body = self.get(port, "/api/runs/%s" % out["run_id"])
+        detail = json.loads(body)
+        self.assertTrue(any(l["kind"] == "tool" for s in detail["sessions"] for l in s["lines"]))
+        status, font = self.get(port, "/fonts/recursive.woff2")
+        self.assertEqual((status, font[:4]), (200, b"wOF2"))
+        self.assertEqual(self.get(port, "/api/state", host="evil.example:%d" % port)[0], 421)
+        self.assertEqual(self.get(port, "/api/state", method="POST")[0], 405)
+
+    def test_snapshot_is_one_file_with_its_data(self):
+        self.ticket("SHOP-1", "Fix </script><!--<script> paging & more", "Page 0 must show page 1.", ["agent-ready"])
+        code, out = self.run_ticket()
+        target = self.tmp / "snap.html"
+        code, text = self.cq("dashboard", "--snapshot", str(target))
+        self.assertEqual(code, 0, text)
+        html = target.read_text()
+        self.assertNotIn("/*CQ_SNAPSHOT*/null", html)
+        self.assertIn("data:font/woff2;base64,d09GMg", html)   # the typefaces and lamp lenses travel with the file
+        self.assertIn("data:image/png;base64,iVBORw0KGgo", html)
+        self.assertNotIn('url("/lamps/', html)
+        self.assertIn(out["run_id"], html)
+        script = html.split("const SNAPSHOT = ", 1)[1].split(";\nlet S", 1)[0]
+        self.assertNotIn("<", script)
+        self.assertEqual(json.loads(script)["runs"][0]["summary"], "Fix </script><!--<script> paging & more")
 
 
 class Units(unittest.TestCase):

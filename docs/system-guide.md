@@ -16,13 +16,14 @@ control/                 becomes your control repo; keep it outside every projec
   registry.yml           your repositories: paths, check commands, risk paths, Jira projects
   engine.yml             how the engine reaches Jira, Claude Code, and how long it waits
   src/cq/                policy engine and run store
-  src/cq/engine/         the run engine (about 6,000 lines of Python in all)
+  src/cq/engine/         the run engine, the merge request inbox, `watch`
+  src/cq/dashboard/      the local dashboard (one page, read-only; Recursive and Tiny5 typefaces, SIL OFL)
   hermes/cq-operator/    a Hermes skill that runs the engine on a schedule
   templates/             what `cq init-repo` puts into a project
     cq/                  criticality.yml, coding standards, business-critical map
     claude/skills/       cq-screen, cq-run, cq-panel, cq-aggregate, cq-mr-loop
     claude/agents/       cq-reviewer, cq-verifier, cq-fixer, cq-plan-reviewer
-  tests/                 225 tests: policy contract, units, templates, end to end, engine
+  tests/                 240 tests: policy contract, units, templates, end to end, engine
 ```
 
 ## Install
@@ -49,6 +50,10 @@ cq engine resume --waiting        every run waiting on Duo or SonarQube
 cq engine pull --limit 1          start runs for agent-ready tickets, within the WIP limit
 cq engine status | stats          where each run stands; the numbers to measure by
 cq engine cancel <run>            stop; branch and merge request are kept
+cq engine watch [<run>]           follow agent sessions live (default: every active run)
+cq engine mrs                     every open cq merge request: what it waits for, whose turn
+cq engine update <run> [--rebase] bring main into the branch, then check the change again
+cq dashboard [--open]             the local dashboard: http://127.0.0.1:8765
 ```
 
 A run ends in one of four states. Exit codes: 0 COMPLETED, 2 NEEDS_HUMAN, 3 WAITING, 1 FAILED.
@@ -106,6 +111,77 @@ session the engine checks that the commits it had are still there. A session
 that times out is killed with everything it started.
 Your user settings still apply, so an allow rule there (for example
 `Bash(*)`) widens what every session may do. Keep those narrow.
+
+## Watching agents work
+
+Every agent session streams (`claude -p --output-format stream-json`). Each
+event lands in `~/.cq/runs/<run>/agents/<time>-<role>-<attempt>.stream.jsonl`
+as it happens. `cq engine watch` turns that into one line per step:
+
+```
+07:14:02  SHOP-12 reviewer:structure    ▶ started · claude-opus-5-5 · read
+07:14:09  SHOP-12 reviewer:structure    ▸ Read src/cart/total.py
+07:14:31  SHOP-12 fixer                 ▸ Bash pytest -q tests/test_total.py
+07:14:33  SHOP-12 fixer                 ✗ 1 failed, 12 passed
+07:15:10  SHOP-12 fixer                 ■ done · $0.41 · 68s · claude --resume 3f2c…
+```
+
+With `claude.keep_sessions: true` (the default in `engine.yml`) Claude Code
+keeps each session, and `claude --resume <id>` opens it in the normal UI to
+read, or to ask the agent why it did something. Anything you change that way
+is outside the engine: resume the run afterwards and the evidence checks catch
+it. Sessions collect under `~/.claude/projects/`; set `keep_sessions: false`
+once you trust the runs. Attaching to a session while it runs is not
+possible: Claude Code's background sessions do not combine with `-p`.
+
+## Merge requests and the dashboard
+
+cq never merges. `cq engine mrs` lists every open merge request it raised,
+with the next action, whose turn it is, and the command:
+
+| Whose turn | When |
+| --- | --- |
+| you | a decision (NEEDS_HUMAN), a failed run, conflicts with main, a failed pipeline, changes requested or open threads from reviewers, a rebase the project needs, a draft cq passed and you have not reviewed, approved and ready to merge |
+| cq | new commits on GitLab cq has not checked, new Duo comments, waiting on Duo or SonarQube. These carry `auto: true`; Hermes runs the command |
+| reviewer | approvals still needed, a review requested and not given |
+
+Flags show the rest at a glance: draft, behind main by N commits, pipeline
+state, stale (no activity for `dashboard.stale_days`), approvals. A draft
+merge request reports only `draft_status` to GitLab's merge check, so cq reads
+conflicts, diverged commits, the pipeline, approvals, reviewers and threads
+separately.
+
+`cq dashboard` serves the same on a page at http://127.0.0.1:8765, this machine
+only. It is styled as an old desktop computer: a beige case, a status panel of
+illuminated lamps (your turn amber, cq working teal, waiting warm white,
+reviewers yellow, failed red, passed in the last 30 days green; a lamp lights
+when its count is above zero and jumps to its list when clicked), and a screen
+of black-and-white windows below. Color on the screen is only ever a lamp, so
+state is the one thing in color. Every lamp is the same pair of grey lens
+images (`src/cq/dashboard/lamps/lit.png` and `off.png`), tinted with a CSS
+`hard-light` blend over the lamp's color. To use photographs of real lamps,
+replace those two files with grey crops of a lit and an unlit lens (about 3:2). The screen shows the turn
+board (your turn, cq's turn, reviewers), active and finished
+runs, each repository's numbers for the last 30 days, and a run panel with the
+agents' live sessions, findings, verdict and history. The page reads the run
+store every 5 seconds and GitLab every `dashboard.refresh_seconds` (60). It
+changes nothing: it shows commands for you to copy. `cq dashboard --snapshot
+file.html` writes a copy with its data inside, to open anywhere.
+
+The engine keeps a merge request current on its own:
+
+- **Commits pushed on GitLab** (a suggestion applied in the web UI, a
+  colleague's push) are taken in by fast-forward on the next resume, then
+  checked and reviewed like any change.
+- **Diverged history** (someone rebased on GitLab while the worktree moved)
+  stops the run and names both ways out. The engine never force-pushes on its own.
+- **Main moved on.** `cq engine update <run>` merges main into the branch;
+  `--rebase` rebases and force-pushes with a lease instead. A conflict stops
+  before anything is pushed and names the files. The change is then measured
+  from where it now forks from main, so main's own changes are not reviewed as
+  part of it.
+- **Duo comments after cq decided** (an automatic review, a colleague asking
+  Duo again) are read on every pass through the merge request.
 
 ## Driving a run by hand
 
@@ -310,6 +386,6 @@ Try each once on a noncritical merge request.
 cd ~/cq-control && .venv/bin/python -m unittest discover -s tests
 ```
 
-About three minutes. The tests use their own copy of the policy, so your edits to
+About six minutes. The tests use their own copy of the policy, so your edits to
 `policy/floor.yml` do not break them. `tests/test_policy.py` is the contract:
 same input, same verdict; missing or stale evidence is never a pass.

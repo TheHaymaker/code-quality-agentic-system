@@ -43,6 +43,11 @@ claude:
   timeout_seconds: 3600
   max_turns: {screener: 30, planner: 60, plan_reviewer: 40, implementer: 200, test_author: 120,
               reviewer: 80, verifier: 80, aggregator: 40, fixer: 150}
+  # Save every agent session so you can open it later in Claude Code with
+  # `claude --resume <session id>` (the id is in `cq engine watch` and the
+  # dashboard). Sessions pile up under ~/.claude/projects/; turn it off once
+  # you trust the runs.
+  keep_sessions: true
   # Commands an implementer, test author, verifier or fixer may run besides git
   # and the registered checks, as Claude Code permission rules. Single-test runs
   # let the verifier prove a finding with one test.
@@ -61,3 +66,9 @@ waits:
 
 # Most passes through the evidence loop before the engine gives up and asks you.
 max_passes: 14
+
+# `cq dashboard` and `cq engine mrs`.
+dashboard:
+  port: 8765              # http://127.0.0.1:8765, this machine only
+  stale_days: 7           # a merge request with no activity this long is flagged stale
+  refresh_seconds: 60     # how often the dashboard asks GitLab again

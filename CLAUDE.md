@@ -19,7 +19,7 @@ project that `cq` reviews).
 cd control
 # fast (~2 s): what install.sh and CI run on every push
 PYTHONPATH=src python3 -m unittest tests.test_policy tests.test_units tests.test_templates tests.test_engine.Units tests.test_engine.JiraSearch
-# full (~3.5 min): end to end against fake glab, claude, gemini, Jira, SonarQube
+# full (~6 min): end to end against fake glab, claude, gemini, Jira, SonarQube
 PYTHONPATH=src python3 -m unittest discover -s tests
 ```
 

@@ -119,5 +119,16 @@ def git(worktree: Path, *args: str, check: bool = True) -> str:
     return proc.stdout.strip()
 
 
+def remote_branch_head(worktree: Path, remote: str, branch: str) -> str:
+    """The commit `branch` points at on `remote`, or "". ls-remote matches ref
+    tails, so `backup/cq/x` would also match `cq/x`: only the exact ref counts."""
+    ref = "refs/heads/%s" % branch
+    for line in git(worktree, "ls-remote", remote, ref, check=False).splitlines():
+        sha, _, name = line.partition("\t")
+        if name.strip() == ref:
+            return sha.strip()
+    return ""
+
+
 def git_ok(worktree: Path, *args: str) -> bool:
     return subprocess.run(["git", "-C", str(worktree), *args], capture_output=True).returncode == 0
